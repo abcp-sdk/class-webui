@@ -1,0 +1,42 @@
+# The CLASS webui is served by an aggregating Caddy that is SAME-ORIGIN with
+# both the agent RPC and the skill-server: `/` serves the static build,
+# `/agent.v1.*` is reverse-proxied to the class agent over h2c, and
+# `/skills-api/*` is reverse-proxied to the class skill-server (prefix
+# stripped), so the read-only Skills tab makes a same-origin fetch with no CORS.
+# The browser needs only a tenant token — the API base is always this page's
+# own origin.
+#
+# Upstreams are overridable with AGENT_UPSTREAM / SKILL_SERVER_UPSTREAM (Caddy
+# env), e.g. `class-agent.agent.svc.cluster.local:80`.
+:8080 {
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# Connect RPC (AgentService / AdminService) -> class agent over cleartext HTTP/2.
+	handle /agent.v1.* {
+		reverse_proxy {$AGENT_UPSTREAM:class-agent.agent.svc.cluster.local:80} {
+			transport http {
+				versions h2c
+			}
+		}
+	}
+
+	# Read-only Agent Skills catalog -> skill-server (plain HTTP). Strip the
+	# `/skills-api` prefix so `/skills-api/v1/skills` hits `/v1/skills`.
+	handle_path /skills-api/* {
+		reverse_proxy {$SKILL_SERVER_UPSTREAM:class-skill-server.agent.svc.cluster.local:80}
+	}
+
+	# Static SPA with client-side routing fallback.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output stdout
+		format console
+	}
+}
